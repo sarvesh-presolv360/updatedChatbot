@@ -168,9 +168,12 @@
           return r.json();
         })
         .then(function (data) {
+          var secret = data.client_secret;
           var ck = document.createElement('openai-chatkit');
           ck.setOptions({
-            auth: { clientSecret: data.client_secret },
+            api: {
+              getClientSecret: function () { return secret; },
+            },
             theme: 'light',
             accentColor: '#1a1a2e',
           });

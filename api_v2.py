@@ -394,7 +394,7 @@ async def create_chatkit_session(request: Request):
 
     response = requests.post(
         CHATKIT_API_URL,
-        json={"workflow": {"id": workflow_id}, "user": {"id": user_id}},
+        json={"workflow": {"id": workflow_id}, "user": user_id},
         headers={
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
