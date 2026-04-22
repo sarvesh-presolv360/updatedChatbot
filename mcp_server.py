@@ -62,7 +62,6 @@ def get_case_status(case_id: str) -> dict:
         return {
             "case_id": case.caseid,
             "status": case.status or 0,
-            "txtstatus": case.txtstatus or "",
         }
     except ValueError as e:
         return {"error": str(e)}
