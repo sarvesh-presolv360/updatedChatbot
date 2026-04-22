@@ -1,8 +1,13 @@
 (function () {
   'use strict';
 
+  // Read API base URL from the script tag's data-api-url attribute.
+  // Falls back to same-origin (works when page and API are on the same domain).
+  var _script = document.currentScript;
+  var API_BASE = (_script && _script.getAttribute('data-api-url')) || '';
+
   var CHATKIT_CDN = 'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js';
-  var SESSION_URL = (window.__WEDGIE_API_URL__ || '') + '/api/create-session';
+  var SESSION_URL = API_BASE + '/api/create-session';
 
   var styles = `
     #wedgie-btn {
@@ -110,7 +115,6 @@
   }
 
   function injectHTML() {
-    // Floating button
     var btn = document.createElement('button');
     btn.id = 'wedgie-btn';
     btn.setAttribute('aria-label', 'Open chat');
@@ -120,7 +124,6 @@
       </svg>`;
     document.body.appendChild(btn);
 
-    // Chat panel
     var panel = document.createElement('div');
     panel.id = 'wedgie-panel';
     panel.setAttribute('role', 'dialog');
@@ -139,8 +142,7 @@
     return { btn: btn, panel: panel };
   }
 
-  var chaткitReady = false;
-  var chaткitEl = null;
+  var initialized = false;
 
   function loadChatKitScript(cb) {
     if (document.querySelector('script[src="' + CHATKIT_CDN + '"]')) {
@@ -158,34 +160,34 @@
     var loader = document.getElementById('wedgie-loader');
 
     loadChatKitScript(function () {
-      fetch(SESSION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-        .then(function (r) {
-          if (!r.ok) throw new Error('Session error: ' + r.status);
-          return r.json();
-        })
-        .then(function (data) {
-          var secret = data.client_secret;
-          var ck = document.createElement('openai-chatkit');
-          ck.setOptions({
-            api: {
-              getClientSecret: function () { return secret; },
-            },
-            theme: 'light',
-            accentColor: '#1a1a2e',
-          });
-          if (loader) loader.remove();
-          body.appendChild(ck);
-          chaткitEl = ck;
-          chaткitReady = true;
-        })
-        .catch(function (err) {
-          if (loader) loader.textContent = 'Failed to load chat. Please try again.';
-          console.error('[Wedgie]', err);
-        });
+      var ck = document.createElement('openai-chatkit');
+
+      // The component calls getClientSecret whenever it needs a fresh token.
+      // We fetch it from our FastAPI backend using the absolute URL.
+      ck.setOptions({
+        api: {
+          getClientSecret: function () {
+            return fetch(SESSION_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
+            })
+              .then(function (r) {
+                if (!r.ok) throw new Error('Session error ' + r.status);
+                return r.json();
+              })
+              .then(function (data) {
+                return data.client_secret;
+              });
+          },
+        },
+        theme: 'light',
+        accentColor: '#1a1a2e',
+      });
+
+      if (loader) loader.remove();
+      body.appendChild(ck);
+      initialized = true;
     });
   }
 
@@ -195,14 +197,13 @@
     var btn = els.btn;
     var panel = els.panel;
     var body = document.getElementById('wedgie-body');
-
     var isOpen = false;
 
     function openPanel() {
       panel.classList.add('open');
       btn.setAttribute('aria-expanded', 'true');
       isOpen = true;
-      if (!chaткitReady) initChatKit(body);
+      if (!initialized) initChatKit(body);
     }
 
     function closePanel() {
