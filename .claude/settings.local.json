@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync:*)",
+      "Bash(timeout 5 python main.py)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(python -m json.tool)",
+      "Bash(timeout 8 python main.py)",
+      "Bash(timeout 10 python main.py)",
+      "Bash(pkill -f \"python main.py\")",
+      "Bash(curl -s http://localhost:8000/api/cases?skip=0)",
+      "Bash(curl -s http://localhost:8000/api/cases/1)",
+      "Bash(curl -s http://localhost:8000/api/users?skip=0)",
+      "Bash(curl -v http://localhost:8000/health)",
+      "Bash(curl -s \"http://localhost:8000/api/cases?skip=0&limit=5\")",
+      "Bash(curl -s \"http://localhost:8000/api/cases/1\")",
+      "Bash(curl -s \"http://localhost:8000/api/users?skip=0&limit=3\")",
+      "Bash(python -c 'import ast, sys *)",
+      "Bash(python -c ' *)",
+      "Bash(pip show *)",
+      "Bash(pip index *)"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables - NEVER commit secrets
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs
+*.log
+api_server.log
