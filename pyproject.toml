@@ -3,7 +3,7 @@ name = "arbitration-api"
 version = "0.1.0"
 description = "Arbitration API - Manage legal arbitration cases with FastAPI"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.135.0",
     "uvicorn[standard]>=0.40.0",
