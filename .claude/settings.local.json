@@ -37,7 +37,9 @@
       "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\(\\); from api_v2 import app; print\\('import OK'\\)\")",
       "Bash(netstat -ano)",
       "Bash(taskkill *)",
-      "PowerShell(Stop-Process *)"
+      "PowerShell(Stop-Process *)",
+      "WebFetch(domain:cdn.platform.openai.com)",
+      "WebFetch(domain:forum.bubble.io)"
     ]
   }
 }

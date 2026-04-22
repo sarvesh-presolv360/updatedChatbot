@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 import random
 import logging
 import sys
+import os
+import uuid
 import requests
 from email_service import get_jwt_token
 from db import SessionLocal, ArbCase, User, UserInvolvedInAgreementArb, test_connection
@@ -364,7 +367,54 @@ def get_case_for_ai(case_id: str, verified_token: str, db: Session = Depends(get
 
 
 # ─────────────────────────────────────────
-# 3. HEALTH CHECK
+# 3. CHATKIT SESSION (Wedgie widget)
+# ─────────────────────────────────────────
+
+CHATKIT_API_URL = "https://api.openai.com/v1/chatkit/sessions"
+CHATKIT_WORKFLOW_ID = os.getenv("VITE_CHATKIT_WORKFLOW_ID", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+
+@app.post("/api/create-session")
+async def create_chatkit_session(request: Request):
+    """Create a short-lived ChatKit client secret for the Wedgie widget."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    if not CHATKIT_WORKFLOW_ID:
+        raise HTTPException(status_code=500, detail="ChatKit workflow ID not configured")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    workflow_id = body.get("workflowId") or body.get("workflow_id") or CHATKIT_WORKFLOW_ID
+    user_id = body.get("userId") or str(uuid.uuid4())
+
+    response = requests.post(
+        CHATKIT_API_URL,
+        json={"workflow": {"id": workflow_id}, "user": {"id": user_id}},
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+            "OpenAI-Beta": "chatkit_beta=v1",
+        },
+        timeout=10,
+    )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=f"ChatKit session error: {response.text}")
+
+    data = response.json()
+    return {
+        "client_secret": data.get("client_secret"),
+        "expires_after": data.get("expires_after"),
+    }
+
+
+# ─────────────────────────────────────────
+# 4. HEALTH CHECK
 # ─────────────────────────────────────────
 
 @app.get("/health")
@@ -374,8 +424,16 @@ def health_check():
 
 
 # ─────────────────────────────────────────
-# 4. MCP SSE TRANSPORT
+# 5. MCP SSE TRANSPORT
 # ─────────────────────────────────────────
 
 app.mount("/mcp", mcp.http_app(transport="sse"))
 app.mount("/mcp-http", mcp.http_app(transport="streamable-http"))
+
+# ─────────────────────────────────────────
+# 6. STATIC FILES (Wedgie widget)
+# ─────────────────────────────────────────
+
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
