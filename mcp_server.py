@@ -1,20 +1,17 @@
 import random
 import logging
 import requests
+import jwt
 from fastmcp import FastMCP
 from db import SessionLocal, ArbCase, User, UserInvolvedInAgreementArb
 from email_service import get_jwt_token
+from otp_utils import create_otp_token, decode_otp_token, create_verified_token, decode_verified_token, hash_otp
 
 logger = logging.getLogger(__name__)
 
 EMAIL_API_URL = "http://internal.presolv360.com:8080/api/v1/email/send"
 
 mcp = FastMCP(name="Presolv360 Case API")
-
-# Shared in-memory stores — imported by api_v2.py after these are defined.
-# api_v2 imports these back so both REST and MCP tools mutate the same dicts.
-otp_store: dict[int, str] = {}
-verified_sessions: dict[int, bool] = {}
 
 
 def _public_to_db_id(case_id: str) -> int:
@@ -73,7 +70,8 @@ def send_otp(case_id: str, contact: str) -> dict:
     """
     Send a 6-digit OTP to the given email address for the specified case.
     The contact must be a registered email for the case (claimant or respondent).
-    Only email delivery is supported. Call verify_otp next to unlock full case data.
+    Only email delivery is supported.
+    Returns an otp_token — store it and pass it to verify_otp.
     """
     db = SessionLocal()
     try:
@@ -100,7 +98,7 @@ def send_otp(case_id: str, contact: str) -> dict:
             return {"error": "Only email delivery is supported currently"}
 
         otp = str(random.randint(100000, 999999))
-        otp_store[numeric_id] = otp
+        otp_token = create_otp_token(numeric_id, otp)
 
         user_name = "User"
         if user1 and contact == user1.email:
@@ -108,7 +106,7 @@ def send_otp(case_id: str, contact: str) -> dict:
         elif user2 and contact == user2.userEmail:
             user_name = getattr(user2, "name", "User")
 
-        token = get_jwt_token()
+        auth_token = get_jwt_token()
         email_payload = {
             "consumerId": "incase-service",
             "to": [{"email": contact, "name": user_name}],
@@ -116,7 +114,7 @@ def send_otp(case_id: str, contact: str) -> dict:
             "bodyText": (
                 f"Dear {user_name},\n\n"
                 f"Your OTP for case verification is: {otp}\n\n"
-                "This OTP is valid for a limited time.\n\nBest regards,\nPresolv360"
+                "This OTP is valid for 10 minutes.\n\nBest regards,\nPresolv360"
             ),
             "caseId": str(case.id),
             "isTest": False,
@@ -125,7 +123,7 @@ def send_otp(case_id: str, contact: str) -> dict:
             EMAIL_API_URL,
             json=email_payload,
             headers={
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"Bearer {auth_token}",
                 "Content-Type": "application/json",
             },
             timeout=5,
@@ -133,7 +131,7 @@ def send_otp(case_id: str, contact: str) -> dict:
         if resp.status_code not in [200, 201]:
             return {"error": f"Email service failed: {resp.text}"}
 
-        return {"message": "OTP sent successfully", "case_id": case_id}
+        return {"message": "OTP sent successfully", "case_id": case_id, "otp_token": otp_token}
 
     except ValueError as e:
         return {"error": str(e)}
@@ -143,44 +141,57 @@ def send_otp(case_id: str, contact: str) -> dict:
         db.close()
 
 @mcp.tool()
-def verify_otp(case_id: str, otp: str) -> dict:
+def verify_otp(case_id: str, otp: str, otp_token: str) -> dict:
     """
-    Verify the OTP that was sent by send_otp.
-    On success the session is marked as verified and get_case_qa becomes available.
+    Verify the OTP entered by the user.
+    Pass the otp_token returned by send_otp along with the OTP the user received.
+    On success returns a verified_token — store it and pass it to get_case_qa.
     """
-    db = SessionLocal()
     try:
         numeric_id = _public_to_db_id(case_id)
-        case = db.query(ArbCase).filter(ArbCase.id == numeric_id).first()
-        if not case:
-            return {"error": f"Case {case_id!r} not found"}
-
-        if otp_store.get(numeric_id) != otp:
-            return {"error": "Invalid OTP"}
-
-        verified_sessions[numeric_id] = True
-        del otp_store[numeric_id]
-        return {"message": "Verified successfully", "case_id": case_id}
-
     except ValueError as e:
         return {"error": str(e)}
-    finally:
-        db.close()
+
+    try:
+        payload = decode_otp_token(otp_token)
+    except jwt.ExpiredSignatureError:
+        return {"error": "OTP has expired — call send_otp again"}
+    except jwt.InvalidTokenError:
+        return {"error": "Invalid OTP token"}
+
+    if payload["case_id"] != numeric_id:
+        return {"error": "Token does not match the requested case"}
+
+    if payload["otp_hash"] != hash_otp(otp):
+        return {"error": "Invalid OTP"}
+
+    verified_token = create_verified_token(numeric_id)
+    return {"message": "Verified successfully", "case_id": case_id, "verified_token": verified_token}
 
 @mcp.tool()
-def get_case_qa(case_id: str) -> dict:
+def get_case_qa(case_id: str, verified_token: str) -> dict:
     """
     Return full AI-optimised case data: participants, financial details, status,
     timeline, discussion notes, and a plain-language summary hint.
-    Requires prior OTP verification via send_otp → verify_otp.
+    Requires the verified_token returned by verify_otp.
     """
-    db = SessionLocal()
     try:
         numeric_id = _public_to_db_id(case_id)
+    except ValueError as e:
+        return {"error": str(e)}
 
-        if not verified_sessions.get(numeric_id):
-            return {"error": "Not verified — call send_otp then verify_otp first"}
+    try:
+        payload = decode_verified_token(verified_token)
+    except jwt.ExpiredSignatureError:
+        return {"error": "Verification has expired — call send_otp then verify_otp again"}
+    except jwt.InvalidTokenError:
+        return {"error": "Invalid verified token"}
 
+    if payload["case_id"] != numeric_id:
+        return {"error": "Token does not match the requested case"}
+
+    db = SessionLocal()
+    try:
         case = db.query(ArbCase).filter(ArbCase.id == numeric_id).first()
         if not case:
             return {"error": f"Case {case_id!r} not found"}
@@ -222,7 +233,5 @@ def get_case_qa(case_id: str) -> dict:
                 f"Award details: {case.award}."
             ),
         }
-    except ValueError as e:
-        return {"error": str(e)}
     finally:
         db.close()

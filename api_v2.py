@@ -10,8 +10,10 @@ import sys
 import requests
 from email_service import get_jwt_token
 from db import SessionLocal, ArbCase, User, UserInvolvedInAgreementArb, test_connection
-from mcp_server import mcp, otp_store, verified_sessions
+from mcp_server import mcp
+import jwt
 import re
+from otp_utils import create_otp_token, decode_otp_token, create_verified_token, decode_verified_token, hash_otp
 
 EMAIL_API_URL = "http://internal.presolv360.com:8080/api/v1/email/send"
 
@@ -66,7 +68,9 @@ def custom_openapi():
     # Downgrade to 3.0.3 — MCP clients often don't support 3.1.0
     openapi_schema["openapi"] = "3.0.3"
     # Add servers so MCP clients know the base URL
-    openapi_schema["servers"] = [{"url": "https://catgptbot.onrender.com"}]
+    import os
+    base_url = "https://catgptbot.onrender.com" if os.getenv("RENDER") else "http://localhost:8000"
+    openapi_schema["servers"] = [{"url": base_url}]
     # Remove ValidationError schemas (contain anyOf which breaks MCP)
     if "components" in openapi_schema and "schemas" in openapi_schema["components"]:
         openapi_schema["components"]["schemas"].pop("ValidationError", None)
@@ -83,8 +87,6 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 
-
-# otp_store and verified_sessions are defined in mcp_server.py and imported above.
 
 
 # ─────────────────────────────────────────
@@ -129,6 +131,7 @@ class OTPRequest(BaseModel):
 class OTPVerifyRequest(BaseModel):
     case_id: str
     otp: str
+    otp_token: str
 
 
 def get_db():
@@ -211,7 +214,7 @@ def get_case_status(case_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/send-otp")
 def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
-    """Send OTP for case verification."""
+    """Send OTP for case verification. Returns otp_token — pass it to /api/verify-otp."""
     numeric_id = public_to_db_id(request.case_id)
     case = db.query(ArbCase).filter(ArbCase.id == numeric_id).first()
     if not case:
@@ -236,7 +239,7 @@ def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Only email supported currently")
 
     otp = str(random.randint(100000, 999999))
-    otp_store[numeric_id] = otp
+    otp_token = create_otp_token(numeric_id, otp)
 
     user_name = "User"
     if user1 and request.contact == user1.email:
@@ -251,7 +254,7 @@ def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
         "bodyText": (
             f"Dear {user_name},\n\n"
             f"Your OTP for case verification is: {otp}\n\n"
-            "This OTP is valid for a limited time.\n\n"
+            "This OTP is valid for 10 minutes.\n\n"
             "Best regards,\nPresolv360"
         ),
         "caseId": str(case.id),
@@ -259,11 +262,11 @@ def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
     }
 
     try:
-        token = get_jwt_token()
+        auth_token = get_jwt_token()
         response = requests.post(
             EMAIL_API_URL,
             json=email_payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"},
             timeout=5,
         )
         if response.status_code not in [200, 201]:
@@ -271,33 +274,51 @@ def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Email service error: {str(e)}")
 
-    return {"message": "OTP sent successfully", "case_id": request.case_id}
+    return {"message": "OTP sent successfully", "case_id": request.case_id, "otp_token": otp_token}
 
 
 @app.post("/api/verify-otp")
-def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
-    """Verify OTP and create verified session."""
-    numeric_id = public_to_db_id(request.case_id)
-    case = db.query(ArbCase).filter(ArbCase.id == numeric_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+def verify_otp(request: OTPVerifyRequest):
+    """Verify OTP. Send otp_token from /api/send-otp. Returns verified_token for /api/case/{id}/qa."""
+    try:
+        numeric_id = public_to_db_id(request.case_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    if otp_store.get(numeric_id) != request.otp:
+    try:
+        payload = decode_otp_token(request.otp_token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="OTP has expired — request a new one")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid OTP token")
+
+    if payload["case_id"] != numeric_id:
+        raise HTTPException(status_code=401, detail="Token does not match the requested case")
+
+    if payload["otp_hash"] != hash_otp(request.otp):
         raise HTTPException(status_code=401, detail="Invalid OTP")
 
-    verified_sessions[numeric_id] = True
-    del otp_store[numeric_id]
-
-    return {"message": "Verified successfully", "case_id": request.case_id}
+    verified_token = create_verified_token(numeric_id)
+    return {"message": "Verified successfully", "case_id": request.case_id, "verified_token": verified_token}
 
 
 @app.get("/api/case/{case_id}/qa")
-def get_case_for_ai(case_id: str, db: Session = Depends(get_db)):
-    """AI-optimized endpoint for case Q&A. Requires prior OTP verification."""
-    numeric_id = public_to_db_id(case_id)
+def get_case_for_ai(case_id: str, verified_token: str, db: Session = Depends(get_db)):
+    """AI-optimized endpoint for case Q&A. Pass verified_token from /api/verify-otp as query param."""
+    try:
+        numeric_id = public_to_db_id(case_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    if not verified_sessions.get(numeric_id):
-        raise HTTPException(status_code=403, detail="Not verified")
+    try:
+        payload = decode_verified_token(verified_token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Verification expired — re-verify with OTP")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid verified token")
+
+    if payload["case_id"] != numeric_id:
+        raise HTTPException(status_code=401, detail="Token does not match the requested case")
 
     case = db.query(ArbCase).filter(ArbCase.id == numeric_id).first()
     if not case:

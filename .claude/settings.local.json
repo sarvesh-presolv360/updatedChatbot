@@ -18,7 +18,26 @@
       "Bash(python -c 'import ast, sys *)",
       "Bash(python -c ' *)",
       "Bash(pip show *)",
-      "Bash(pip index *)"
+      "Bash(pip index *)",
+      "Bash(git -C /d/UpdatedChatBot log --oneline)",
+      "WebSearch",
+      "WebFetch(domain:openai.github.io)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:www.eesel.ai)",
+      "WebFetch(domain:composio.dev)",
+      "WebFetch(domain:skywork.ai)",
+      "WebFetch(domain:www.thetoolnerd.com)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('otp_utils.py'\\).read\\(\\)\\); print\\('otp_utils.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('mcp_server.py'\\).read\\(\\)\\); print\\('mcp_server.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('api_v2.py'\\).read\\(\\)\\); print\\('api_v2.py OK'\\)\")",
+      "Bash(python main.py)",
+      "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\(\\); from api_v2 import app; print\\('import OK'\\)\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill *)",
+      "PowerShell(Stop-Process *)"
     ]
   }
 }
