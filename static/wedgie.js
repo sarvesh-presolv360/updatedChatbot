@@ -1,10 +1,16 @@
 (function () {
   'use strict';
 
-  // Read API base URL from the script tag's data-api-url attribute.
-  // Falls back to same-origin (works when page and API are on the same domain).
+  // Resolve API base: prefer explicit data-api-url, then fall back to the
+  // origin the script itself was loaded from. This ensures cross-origin embeds
+  // always call back to the correct backend (e.g. catgptbot.onrender.com).
   var _script = document.currentScript;
-  var API_BASE = (_script && _script.getAttribute('data-api-url')) || '';
+  var _explicit = _script && _script.getAttribute('data-api-url');
+  var _scriptOrigin = '';
+  try {
+    if (_script && _script.src) _scriptOrigin = new URL(_script.src).origin;
+  } catch (e) {}
+  var API_BASE = _explicit || _scriptOrigin;
 
   var CHATKIT_CDN = 'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js';
   var SESSION_URL = API_BASE + '/api/create-session';
@@ -182,7 +188,6 @@
           },
         },
         theme: 'light',
-        accentColor: '#1a1a2e',
       });
 
       if (loader) loader.remove();
